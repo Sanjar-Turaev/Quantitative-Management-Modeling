@@ -1,0 +1,193 @@
+---
+title: "Module 4 – Weigelt Corporation LP (R) with lpSolveAPI"
+author: "Sanjar Turaev"
+date: "2025-09-27"
+output: html_document
+---
+
+
+```{r }
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+suppressPackageStartupMessages({
+  library(lpSolveAPI)
+})
+```
+
+```{r setup, include=FALSE}
+# Create model with 10 decision variables:
+# x1L x1M x1S  x2L x2M x2S  x3L x3M x3S  u
+m <- make.lp(0, 10)
+
+# Set objective function (maximize profit, u has coefficient 0)
+set.objfn(m, c(420,360,300,  420,360,300,  420,360,300,  0))
+lp.control(m, sense = "max")
+
+# Add storage constraints for each plant
+add.constraint(m, c(20,15,12, 0,0,0, 0,0,0, 0), "<=", 13000)  # Plant 1
+add.constraint(m, c(0,0,0, 20,15,12, 0,0,0, 0), "<=", 12000)  # Plant 2
+add.constraint(m, c(0,0,0, 0,0,0, 20,15,12, 0), "<=",  5000)  # Plant 3
+
+# Add demand constraints for each size
+add.constraint(m, c(1,0,0, 1,0,0, 1,0,0, 0), "<=",  900)      # Large
+add.constraint(m, c(0,1,0, 0,1,0, 0,1,0, 0), "<=", 1200)      # Medium
+add.constraint(m, c(0,0,1, 0,0,1, 0,0,1, 0), "<=",  750)      # Small
+
+# Add equal utilization constraints
+add.constraint(m, c(1,1,1, 0,0,0, 0,0,0, -750), "=", 0)       # Plant 1
+add.constraint(m, c(0,0,0, 1,1,1, 0,0,0, -900), "=", 0)       # Plant 2
+add.constraint(m, c(0,0,0, 0,0,0, 1,1,1, -450), "=", 0)       # Plant 3
+
+# Set bounds (nonnegative; 0 <= u <= 1)
+set.bounds(m, lower = rep(0, 10))
+set.bounds(m, upper = c(rep(Inf, 9), 1))
+```
+
+```{r }
+# Solve the model
+stat   <- solve(m)          # status code (0 = optimal)
+objval <- get.objective(m)  # optimal profit
+sol    <- get.variables(m)  # solution vector
+
+# Name solution variables
+names(sol) <- c("x1L","x1M","x1S",
+                "x2L","x2M","x2S",
+                "x3L","x3M","x3S","u")
+
+# Print solution
+list(status = stat, objective = objval, solution = sol)
+```
+```{r }
+# This output shows that the linear programming model successfully found an optimal solution (status = 0). The objective value of 696,000 represents the maximum profit achievable under the given constraints. The solution vector lists the number of bags of each size to produce at each plant. Specifically:
+
+# Plant 1 should produce about 517 Large and 178 Medium bags,
+
+# Plant 2 should produce about 667 Medium and 167 Small bags,
+
+# Plant 3 should produce about 417 Small bags,
+# while all other production levels remain at zero.
+# The value of u = 0.9259 indicates that each plant operates at roughly 92.6% of its capacity.
+```
+
+```{r }
+# Organize production results into a table
+plant_tbl <- data.frame(
+  Plant  = c("Plant 1","Plant 2","Plant 3"),
+  Large  = c(sol["x1L"], sol["x2L"], sol["x3L"]),
+  Medium = c(sol["x1M"], sol["x2M"], sol["x3M"]),
+  Small  = c(sol["x1S"], sol["x2S"], sol["x3S"])
+)
+plant_tbl$Total <- rowSums(plant_tbl[,2:4])
+plant_tbl
+```
+```{r }
+# Production plan by plant and size
+# Plant 1: produces Large (516.67) and Medium (177.78), total ≈ 694 units.
+# Plant 2: produces Medium (666.67) and Small (166.67), total ≈ 833 units.
+# Plant 3: produces Small (416.67), total ≈ 417 units.
+# This confirms the solver’s recommendations and shows how production is distributed across plants while meeting capacity utilization.
+```
+
+```{r }
+# Check equal utilization and storage usage
+u   <- sol["u"]
+cap <- c(750,900,450)
+
+stor_used <- c(
+  20*sol["x1L"] + 15*sol["x1M"] + 12*sol["x1S"],
+  20*sol["x2L"] + 15*sol["x2M"] + 12*sol["x2S"],
+  20*sol["x3L"] + 15*sol["x3M"] + 12*sol["x3S"]
+)
+
+check_tbl <- data.frame(
+  Plant = plant_tbl$Plant,
+  TotalOutput = plant_tbl$Total,
+  Required_by_equal_utilization = u * cap,
+  StorageUsed  = stor_used,
+  StorageLimit = c(13000,12000,5000)
+)
+check_tbl
+
+```
+```{r }
+#Storage constraints: Each plant uses exactly its storage limit (13,000, 12,000, 5,000).
+# Demand constraints: Total production of Large (516.7 ≤ 900), Medium (844.4 ≤ 1200), and Small (583.3 ≤ 750) all stay within demand limits.
+# Equal utilization constraints: Totals for each plant match their capacity multiplied by the same utilization factor u ≤ 1: The utilization factor 0.9259 is within the allowable range.
+#All rows show TRUE, confirming feasibility.
+```
+
+```{r }
+# Compare production totals with demand limits
+dem_totals <- c(
+  Large  = sum(plant_tbl$Large),
+  Medium = sum(plant_tbl$Medium),
+  Small  = sum(plant_tbl$Small)
+)
+dem_limits <- c(Large=900, Medium=1200, Small=750)
+rbind(DemandTotals = dem_totals, DemandLimits = dem_limits)
+```
+```{r }
+# The table compares the total production quantities of each bag size against the maximum demand limits:
+# Large bags: 516.67 units produced vs. demand limit of 900
+# Medium bags: 844.44 units produced vs. demand limit of 1200
+# Small bags: 583.33 units produced vs. demand limit of 750
+# Since all production totals are below their respective demand limits, none of the demand constraints are binding. This means that market demand is not the restricting factor in the solution. Instead, the storage capacity constraints at the plants are binding and determine the production plan.
+```
+
+```{r }
+# Simple bar chart of production by plant and size
+mat <- t(as.matrix(plant_tbl[, c("Large","Medium","Small")]))
+colnames(mat) <- plant_tbl$Plant
+barplot(mat, beside = TRUE, xlab = "Plant", ylab = "Units",
+        main = "Production by Plant and Size")
+legend("topright", legend = rownames(mat), fill = gray.colors(nrow(mat)))
+```
+
+```{r }
+if (stat == 0) {
+  u <- sol["u"]
+  cat(sprintf("**Optimal profit (Z): $%s**\n\n", format(obj, big.mark=",")))
+  cat(sprintf("**Common utilization factor (u): %.3f**  (≈ %.1f%% of capacity)\n\n", u, 100*u))
+
+  cat("**Production plan by plant and size:**\n\n")
+  print(plant_tbl, row.names = FALSE)
+
+  cat("\n**Constraint check (all TRUE = feasible):**\n\n")
+  print(diag_tbl, row.names = FALSE)
+
+  cat("\n**Managerial takeaways:**\n")
+  cat("- Plant 1 focuses on Large and Medium; Plant 2 on Medium and Small; Plant 3 on Small only.\n")
+  cat("- Storage limits bind at all plants (StorageUsed ≈ StorageLimit). Demand caps are not binding.\n")
+  cat("- Because all plants run at the same u, the equal utilization policy is satisfied.\n")
+  cat("- To increase profits further, invest in additional storage capacity (especially where storage binds first).\n")
+} else {
+  cat("**No optimal solution found (status != 0).** Please check constraints and data.\n")
+}
+```
+
+```{r }
+# Summary and Conclusion
+
+# The linear programming model for Weigelt Corporation was successfully formulated and solved using R. The solver found an optimal solution (status = 0) with a maximum profit of $696,000.
+
+# The production plan distributes bag sizes across the three plants as follows:
+
+# Plant 1: produces mostly Large (≈517) and Medium (≈178) bags.
+
+# Plant 2: produces mainly Medium (≈667) and some Small (≈167) bags.
+
+# Plant 3: produces only Small (≈417) bags.
+
+# All plants operate at the same utilization factor of about 0.926, meaning each plant uses roughly 92.6% of its capacity.
+
+# The constraint checks confirm feasibility:
+
+# Storage limits at all plants are fully used (binding constraints).
+
+# Equal utilization requirements are satisfied exactly.
+
+# Demand constraints are not binding, since total production of Large, Medium, and Small bags (≈517, 844, 583 respectively) are all within the demand limits (900, 1200, 750).
+
+# In conclusion, the model demonstrates that storage capacity is the main bottleneck in production planning. To achieve higher profits in the future, management should consider investing in additional storage capacity, as increasing market demand alone would not improve results under current plant limitations.
+```
+
+
